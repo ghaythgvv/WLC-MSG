@@ -25,6 +25,7 @@ This file is loaded by welcome_bot.py:  await bot.load_extension("server_logs")
 from __future__ import annotations
 
 import asyncio
+import unicodedata
 
 import discord
 from discord.ext import commands
@@ -54,6 +55,12 @@ COLOR_INFO = 0x9B30FF   # purple
 # ================================================================
 
 
+def norm(text: str) -> str:
+    """Fancy letters (𝗥𝗢𝗟𝗘), emoji and symbols are ignored: '┃𝗥𝗢𝗟𝗘-𝗚𝗜𝗩𝗘𝗡' -> 'rolegiven'."""
+    text = unicodedata.normalize("NFKC", text).lower()
+    return "".join(c for c in text if c.isalnum())
+
+
 def who(user: discord.abc.Snowflake | None) -> str:
     if user is None:
         return "`Unknown`"
@@ -71,11 +78,29 @@ class ServerLogs(commands.Cog):
         if forced:
             ch = guild.get_channel(forced)
             return ch if isinstance(ch, discord.TextChannel) else None
-        keyword = CHANNEL_KEYWORDS[key]
+        keyword = norm(CHANNEL_KEYWORDS[key])
         for ch in guild.text_channels:
-            if keyword in ch.name.lower():
+            if keyword in norm(ch.name):
                 return ch
         return None
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Prints in the Railway logs which log channels were found (and if the bot can write there)."""
+        guild = self.bot.get_guild(GUILD_ID)
+        if guild is None:
+            print("❌ logs: server not found")
+            return
+        for key in CHANNEL_KEYWORDS:
+            ch = self.find_channel(guild, key)
+            if ch is None:
+                print(f"❌ logs: no channel found for '{key}' (looking for '{CHANNEL_KEYWORDS[key]}')")
+                continue
+            perms = ch.permissions_for(guild.me)
+            ok = perms.view_channel and perms.send_messages and perms.embed_links
+            print(f"{'✅' if ok else '⚠️'} logs: {key} -> #{ch.name}" + ("" if ok else "  (bot can't send/embed here)"))
+        if not guild.me.guild_permissions.view_audit_log:
+            print("⚠️ logs: the bot is missing View Audit Log")
 
     async def log(self, guild: discord.Guild, key: str, embed: discord.Embed) -> None:
         """Send the embed to its own channel and to LOGS-ALL-SERVER."""
