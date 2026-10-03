@@ -55,6 +55,9 @@ CHAT_CHANNEL_ID: int | None = 1513904263502499870
 WELCOME_TRIGGER = "join"
 VERIFIED_ROLE_ID = 1513904156350353511
 
+# Voice channel a new member joins to get verified ("Waiting for Move").
+VERIFY_VC_ID: int | None = 1513904254535073883
+
 # The animated banner (must sit next to this file). If the file is missing, the message is
 # sent without it.
 BANNER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Liebe_Roxo.gif")
@@ -98,27 +101,29 @@ def build_welcome(member: discord.Member) -> tuple[discord.Embed, discord.File |
     links_text = "\n".join(links)
 
     description = (
-        f"# {E} WELCOME TO ELT {E}\n"
+        "# WELCOME TO ELT\n"
         f"## {member.mention}\n"
         "*Step inside… and remain as long as you dare.*\n"
         "\n"
-        f"> {E} You are our `{ordinal(count)}` member.\n"
+        f"> You are our `{ordinal(count)}` member.\n"
         "> The community just grew **stronger**.\n"
     )
     if links_text:
-        description += f"\n### {E} Begin your journey\n{links_text}\n"
-    description += (
-        "\n"
-        f"-# {E} Respect everyone, keep it fun, and follow the rules. "
-        "Need help? Join **Waiting for Help** and a **moderator** will be with you."
-    )
+        description += f"\n### Begin your journey\n{links_text}\n"
+    if VERIFY_VC_ID:
+        description += (
+            "\n### How to verify\n"
+            f"> **1.** Join the voice channel <#{VERIFY_VC_ID}>\n"
+            "> **2.** Wait a moment — a **staff member** will verify you\n"
+            "> **3.** Once verified, the **whole server opens** for you\n"
+        )
 
     embed = discord.Embed(description=description, color=EMBED_COLOR)
     embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
     embed.set_thumbnail(url=member.display_avatar.url)
-    embed.add_field(name=f"{E} Member", value=f"`{member.display_name}`", inline=True)
-    embed.add_field(name=f"{E} Account Created", value=discord.utils.format_dt(member.created_at, "R"), inline=True)
-    embed.add_field(name=f"{E} Member Number", value=f"`#{count:,}`", inline=True)
+    embed.add_field(name="Member", value=f"`{member.display_name}`", inline=True)
+    embed.add_field(name="Account Created", value=discord.utils.format_dt(member.created_at, "R"), inline=True)
+    embed.add_field(name="Member Number", value=f"`#{count:,}`", inline=True)
     embed.set_footer(
         text=f"{SERVER_NAME} • Welcome aboard",
         icon_url=guild.icon.url if guild.icon else None,
