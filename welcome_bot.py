@@ -101,7 +101,7 @@ def build_welcome(member: discord.Member) -> tuple[discord.Embed, discord.File |
     links_text = "\n".join(links)
 
     description = (
-        "# WELCOME TO ELT\n"
+        "# ✦ WELCOME TO ELITE LEADERS COMMUNITY ✦\n"
         f"## {member.mention}\n"
         "*Step inside… and remain as long as you dare.*\n"
         "\n"
