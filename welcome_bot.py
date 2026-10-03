@@ -68,7 +68,7 @@ WELCOME_COOLDOWN = 10 * 60
 intents = discord.Intents.default()
 intents.members = True  # needed to see joins and role changes (enable in the Developer Portal)
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents)  # no prefix commands -> no message-content warning
 
 _last_welcome: dict[int, float] = {}
 
@@ -135,20 +135,23 @@ def build_welcome(member: discord.Member) -> tuple[discord.Embed, discord.File |
     return embed, file
 
 
-async def send_welcome(member: discord.Member):
-    if member.bot or member.guild.id != GUILD_ID:
-        return
+async def send_welcome(member: discord.Member, force: bool = False) -> str | None:
+    """Posts the welcome. Returns None on success, or a short text saying why nothing was sent."""
+    if member.bot:
+        return "bots are not welcomed"
+    if member.guild.id != GUILD_ID:
+        return f"wrong server (GUILD_ID is {GUILD_ID})"
 
     now = time.monotonic()
-    if now - _last_welcome.get(member.id, -1e9) < WELCOME_COOLDOWN:
+    if not force and now - _last_welcome.get(member.id, -1e9) < WELCOME_COOLDOWN:
         print(f"⏭️ {member} was welcomed recently — skipped")
-        return
+        return "welcomed recently (cooldown)"
     _last_welcome[member.id] = now
 
     channel = member.guild.get_channel(WELCOME_CHANNEL_ID) if WELCOME_CHANNEL_ID else None
     if not isinstance(channel, discord.abc.Messageable):
-        print("⚠️ Set WELCOME_CHANNEL_ID to the channel where welcomes should be posted")
-        return
+        print(f"❌ Can't find the welcome channel {WELCOME_CHANNEL_ID} — wrong ID, or the bot can't see it")
+        return "the bot can't see the welcome channel"
 
     embed, file = build_welcome(member)
     try:
@@ -159,8 +162,13 @@ async def send_welcome(member: discord.Member):
             allowed_mentions=discord.AllowedMentions(users=[member]),
         )
         print(f"✅ Welcomed {member}")
+        return None
+    except discord.Forbidden:
+        print("❌ Missing permissions in the welcome channel (need View Channel, Send Messages, Embed Links, Attach Files)")
+        return "the bot is missing permissions in the welcome channel"
     except discord.HTTPException as e:
         print(f"❌ Failed to send the welcome for {member}: {e}")
+        return f"Discord error: {e}"
 
 
 @bot.event
@@ -173,6 +181,27 @@ async def setup_hook():
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id}) — welcome trigger: {WELCOME_TRIGGER}")
+    guild = bot.get_guild(GUILD_ID)
+    if guild is None:
+        print(f"❌ The bot is not in the server {GUILD_ID} — check GUILD_ID and that the bot was invited")
+        return
+    channel = guild.get_channel(WELCOME_CHANNEL_ID) if WELCOME_CHANNEL_ID else None
+    if channel is None:
+        print(f"❌ Can't see the welcome channel {WELCOME_CHANNEL_ID} — wrong ID, or the bot lacks View Channel")
+        return
+    perms = channel.permissions_for(guild.me)
+    missing = [
+        name for name, ok in (
+            ("View Channel", perms.view_channel),
+            ("Send Messages", perms.send_messages),
+            ("Embed Links", perms.embed_links),
+            ("Attach Files", perms.attach_files),
+        ) if not ok
+    ]
+    if missing:
+        print(f"⚠️ Missing permissions in #{channel.name}: {', '.join(missing)}")
+    else:
+        print(f"✅ Welcome channel OK: #{channel.name}")
 
 
 @bot.event
@@ -186,7 +215,11 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     if WELCOME_TRIGGER != "verified":
         return
     role = after.guild.get_role(VERIFIED_ROLE_ID)
-    if role and role not in before.roles and role in after.roles:
+    if role is None:
+        print(f"⚠️ VERIFIED_ROLE_ID {VERIFIED_ROLE_ID} doesn't exist in the server")
+        return
+    if role not in before.roles and role in after.roles:
+        print(f"🎖️ {after} got the Verified role — sending the welcome")
         await send_welcome(after)
 
 
@@ -197,6 +230,17 @@ async def testwelcome(interaction: discord.Interaction):
     await interaction.response.send_message(
         embed=embed,
         file=file if file else discord.utils.MISSING,
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="sendwelcome", description="Send a REAL welcome for yourself in the welcome channel (test)")
+@app_commands.default_permissions(administrator=True)
+async def sendwelcome(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    problem = await send_welcome(interaction.user, force=True)
+    await interaction.followup.send(
+        "✅ Sent to the welcome channel." if problem is None else f"❌ Not sent: {problem}.",
         ephemeral=True,
     )
 
