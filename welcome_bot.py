@@ -52,7 +52,7 @@ CHAT_CHANNEL_ID: int | None = 1513904263502499870
 # When to welcome someone:
 #   "verified" -> right after a moderator verifies them (they get the Verified role)
 #   "join"     -> the moment they join the server
-WELCOME_TRIGGER = "verified"
+WELCOME_TRIGGER = "join"
 VERIFIED_ROLE_ID = 1513904156350353511
 
 # The animated banner (must sit next to this file). If the file is missing, the message is
