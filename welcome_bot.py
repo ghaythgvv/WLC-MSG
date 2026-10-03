@@ -83,43 +83,42 @@ def build_welcome(member: discord.Member) -> tuple[discord.Embed, discord.File |
     guild = member.guild
     count = guild.member_count or len(guild.members)
 
+    E = "<a:emoji_8128:1556021990324969592>"
+
     # Quick-start links (only the ones that are set).
     links = []
     if RULES_CHANNEL_ID:
-        links.append(f"📜 **Read the rules** — <#{RULES_CHANNEL_ID}>")
+        links.append(f"{E} **Rules** ➜ <#{RULES_CHANNEL_ID}>")
     if ANNOUNCEMENTS_CHANNEL_ID:
-        links.append(f"📢 **Stay updated** — <#{ANNOUNCEMENTS_CHANNEL_ID}>")
+        links.append(f"{E} **Announcements** ➜ <#{ANNOUNCEMENTS_CHANNEL_ID}>")
     if ROLES_CHANNEL_ID:
-        links.append(f"🎭 **Choose your roles** — <#{ROLES_CHANNEL_ID}>")
+        links.append(f"{E} **Roles** ➜ <#{ROLES_CHANNEL_ID}>")
     if CHAT_CHANNEL_ID:
-        links.append(f"💬 **Meet the community** — <#{CHAT_CHANNEL_ID}>")
+        links.append(f"{E} **Chat** ➜ <#{CHAT_CHANNEL_ID}>")
     links_text = "\n".join(links)
 
     description = (
-        f"## Welcome, {member.mention}\n"
+        f"# {E} WELCOME TO ELT {E}\n"
+        f"## {member.mention}\n"
         "*Step inside… and remain as long as you dare.*\n"
         "\n"
-        f"Your presence has been expected. You are our **{ordinal(count)}** member, "
-        "and the community just grew stronger.\n"
+        f"> {E} You are our `{ordinal(count)}` member.\n"
+        "> The community just grew **stronger**.\n"
     )
     if links_text:
-        description += f"\n### Begin your journey\n{links_text}\n"
+        description += f"\n### {E} Begin your journey\n{links_text}\n"
     description += (
         "\n"
-        "> Respect everyone, keep it fun, and follow the rules. "
-        "If you ever need help, join **Waiting for Help** and a **moderator** will be with you."
+        f"-# {E} Respect everyone, keep it fun, and follow the rules. "
+        "Need help? Join **Waiting for Help** and a **moderator** will be with you."
     )
 
-    embed = discord.Embed(
-        title="✦ WELCOME TO ELITE LEADERS COMMUNITY ✦",
-        description=description,
-        color=EMBED_COLOR,
-    )
+    embed = discord.Embed(description=description, color=EMBED_COLOR)
     embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
     embed.set_thumbnail(url=member.display_avatar.url)
-    embed.add_field(name="Member", value=member.mention, inline=True)
-    embed.add_field(name="Account Created", value=discord.utils.format_dt(member.created_at, "R"), inline=True)
-    embed.add_field(name="Member Number", value=f"`#{count:,}`", inline=True)
+    embed.add_field(name=f"{E} Member", value=f"`{member.display_name}`", inline=True)
+    embed.add_field(name=f"{E} Account Created", value=discord.utils.format_dt(member.created_at, "R"), inline=True)
+    embed.add_field(name=f"{E} Member Number", value=f"`#{count:,}`", inline=True)
     embed.set_footer(
         text=f"{SERVER_NAME} • Welcome aboard",
         icon_url=guild.icon.url if guild.icon else None,
