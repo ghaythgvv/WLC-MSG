@@ -48,10 +48,36 @@ CHANNEL_KEYWORDS = {
 # Optional: force a channel by ID instead of by name. Example: {"kick": 123456789}
 LOG_CHANNEL_IDS: dict[str, int | None] = {}
 
-COLOR_GOOD = 0x57F287   # green  (join, unban, role added, create)
-COLOR_BAD = 0xED4245    # red    (leave, ban, kick, delete)
-COLOR_WARN = 0xFEE75C   # yellow (timeout)
-COLOR_INFO = 0x9B30FF   # purple
+# ONE color for every log: purple
+PURPLE = 0x9B30FF
+
+# Purple-only emoji set
+E = {
+    "join": "💜",
+    "leave": "🟣",
+    "ban": "🔮",
+    "unban": "🟪",
+    "kick": "👿",
+    "timeout": "😈",
+    "untimeout": "🪻",
+    "role": "💜",
+    "role_add": "🟣",
+    "role_remove": "🟪",
+    "role_new": "🔮",
+    "role_del": "👿",
+    "chan_new": "🪻",
+    "chan_del": "😈",
+    "dot": "🟣",
+}
+
+CHANNEL_ICONS = {
+    "text": "💬",
+    "voice": "🔊",
+    "category": "📁",
+    "stage_voice": "🎙️",
+    "forum": "🗂️",
+    "news": "📢",
+}
 # ================================================================
 
 
@@ -65,7 +91,34 @@ def who(user: discord.abc.Snowflake | None) -> str:
     if user is None:
         return "`Unknown`"
     mention = getattr(user, "mention", f"<@{user.id}>")
-    return f"{mention} (`{user.id}`)"
+    return f"{mention}\n`{user.id}`"
+
+
+def ts(dt) -> str:
+    """Full date + relative time, e.g.  'October 5, 2026 3:20 PM (2 hours ago)'."""
+    if dt is None:
+        return "`Unknown`"
+    return f"{discord.utils.format_dt(dt, 'F')}\n({discord.utils.format_dt(dt, 'R')})"
+
+
+def human_delta(seconds: float) -> str:
+    seconds = int(seconds)
+    parts = []
+    for name, size in (("d", 86400), ("h", 3600), ("m", 60), ("s", 1)):
+        if seconds >= size:
+            parts.append(f"{seconds // size}{name}")
+            seconds %= size
+    return " ".join(parts) or "0s"
+
+
+def make(title: str, description: str | None = None) -> discord.Embed:
+    return discord.Embed(title=title, description=description, color=PURPLE)
+
+
+def ctype(channel: discord.abc.GuildChannel) -> str:
+    name = str(channel.type).replace("channel_type.", "").replace("_", " ")
+    icon = CHANNEL_ICONS.get(str(channel.type).replace("channel_type.", ""), "📌")
+    return f"{icon} {name.title()}"
 
 
 class ServerLogs(commands.Cog):
@@ -105,7 +158,7 @@ class ServerLogs(commands.Cog):
     async def log(self, guild: discord.Guild, key: str, embed: discord.Embed) -> None:
         """Send the embed to its own channel and to LOGS-ALL-SERVER."""
         embed.timestamp = discord.utils.utcnow()
-        embed.set_footer(text="ELT Logs", icon_url=guild.icon.url if guild.icon else None)
+        embed.set_footer(text="ELT Logs • 💜", icon_url=guild.icon.url if guild.icon else None)
         sent_to: set[int] = set()
         for k in (key, "all"):
             ch = self.find_channel(guild, k)
@@ -139,25 +192,31 @@ class ServerLogs(commands.Cog):
         return None
 
     @staticmethod
-    def add_actor(embed: discord.Embed, entry: discord.AuditLogEntry | None) -> None:
-        embed.add_field(name="By", value=who(entry.user) if entry else "`Unknown`", inline=True)
-        if entry and entry.reason:
-            embed.add_field(name="Reason", value=entry.reason[:1000], inline=False)
+    def add_actor(embed: discord.Embed, entry: discord.AuditLogEntry | None, label: str = "Done By") -> None:
+        embed.add_field(name=f"{E['dot']} {label}", value=who(entry.user) if entry else "`Unknown`", inline=True)
+        reason = entry.reason if entry and entry.reason else None
+        embed.add_field(name=f"{E['dot']} Reason", value=f"```{reason[:900]}```" if reason else "```No reason given```", inline=False)
+
+    @staticmethod
+    def user_header(embed: discord.Embed, user: discord.abc.User) -> None:
+        embed.set_author(name=f"{user} • {user.id}", icon_url=user.display_avatar.url)
+        embed.set_thumbnail(url=user.display_avatar.url)
 
     # ---------------------------------------------------------------- join / leave
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
         if member.guild.id != GUILD_ID:
             return
-        embed = discord.Embed(
-            title="📥 Member Joined",
-            description=f"{member.mention} joined the server.",
-            color=COLOR_GOOD,
-        )
-        embed.set_thumbnail(url=member.display_avatar.url)
-        embed.add_field(name="Member", value=who(member), inline=False)
-        embed.add_field(name="Account Created", value=discord.utils.format_dt(member.created_at, "R"), inline=True)
-        embed.add_field(name="Members Now", value=f"`{member.guild.member_count:,}`", inline=True)
+        age = (discord.utils.utcnow() - member.created_at).total_seconds()
+        embed = make(f"{E['join']} Member Joined", f"{member.mention} just joined **{member.guild.name}** — welcome! 💜")
+        self.user_header(embed, member)
+        embed.add_field(name=f"{E['dot']} Member", value=who(member), inline=True)
+        embed.add_field(name=f"{E['dot']} Member #", value=f"`{member.guild.member_count:,}`", inline=True)
+        embed.add_field(name=f"{E['dot']} Type", value="`Bot`" if member.bot else "`Human`", inline=True)
+        embed.add_field(name=f"{E['dot']} Account Created", value=ts(member.created_at), inline=False)
+        embed.add_field(name=f"{E['dot']} Account Age", value=f"`{human_delta(age)}`", inline=True)
+        if age < 7 * 86400:
+            embed.add_field(name=f"{E['dot']} Warning", value="`New account (under 7 days old)`", inline=True)
         await self.log(member.guild, "join_leave", embed)
 
     @commands.Cog.listener()
@@ -166,31 +225,29 @@ class ServerLogs(commands.Cog):
         if guild.id != GUILD_ID:
             return
 
-        embed = discord.Embed(
-            title="📤 Member Left",
-            description=f"{member.mention} left the server.",
-            color=COLOR_BAD,
-        )
-        embed.set_thumbnail(url=member.display_avatar.url)
-        embed.add_field(name="Member", value=who(member), inline=False)
+        embed = make(f"{E['leave']} Member Left", f"{member.mention} left **{guild.name}**.")
+        self.user_header(embed, member)
+        embed.add_field(name=f"{E['dot']} Member", value=who(member), inline=True)
+        embed.add_field(name=f"{E['dot']} Members Now", value=f"`{guild.member_count:,}`", inline=True)
         if member.joined_at:
-            embed.add_field(name="Joined", value=discord.utils.format_dt(member.joined_at, "R"), inline=True)
-        roles = [r.mention for r in member.roles if r != guild.default_role]
-        if roles:
-            embed.add_field(name="Roles", value=" ".join(roles)[:1000], inline=False)
+            stayed = (discord.utils.utcnow() - member.joined_at).total_seconds()
+            embed.add_field(name=f"{E['dot']} Time In Server", value=f"`{human_delta(stayed)}`", inline=True)
+            embed.add_field(name=f"{E['dot']} Joined", value=ts(member.joined_at), inline=False)
+        roles = [r.mention for r in reversed(member.roles) if r != guild.default_role]
+        embed.add_field(
+            name=f"{E['dot']} Roles ({len(roles)})",
+            value=(" ".join(roles)[:1000] if roles else "`No roles`"),
+            inline=False,
+        )
         await self.log(guild, "join_leave", embed)
 
         # Was it a kick?
         entry = await self.audit_entry(guild, discord.AuditLogAction.kick, member.id)
         if entry:
-            kick = discord.Embed(
-                title="👢 Member Kicked",
-                description=f"{member.mention} was kicked.",
-                color=COLOR_BAD,
-            )
-            kick.set_thumbnail(url=member.display_avatar.url)
-            kick.add_field(name="Member", value=who(member), inline=True)
-            self.add_actor(kick, entry)
+            kick = make(f"{E['kick']} Member Kicked", f"{member.mention} was kicked from **{guild.name}**.")
+            self.user_header(kick, member)
+            kick.add_field(name=f"{E['dot']} Member", value=who(member), inline=True)
+            self.add_actor(kick, entry, "Kicked By")
             await self.log(guild, "kick", kick)
 
     # ---------------------------------------------------------------- bans
@@ -199,10 +256,11 @@ class ServerLogs(commands.Cog):
         if guild.id != GUILD_ID:
             return
         entry = await self.audit_entry(guild, discord.AuditLogAction.ban, user.id)
-        embed = discord.Embed(title="🔨 Member Banned", description=f"{user.mention} was banned.", color=COLOR_BAD)
-        embed.set_thumbnail(url=user.display_avatar.url)
-        embed.add_field(name="Member", value=who(user), inline=True)
-        self.add_actor(embed, entry)
+        embed = make(f"{E['ban']} Member Banned", f"{user.mention} was banned from **{guild.name}**.")
+        self.user_header(embed, user)
+        embed.add_field(name=f"{E['dot']} Member", value=who(user), inline=True)
+        embed.add_field(name=f"{E['dot']} Account Created", value=ts(user.created_at), inline=True)
+        self.add_actor(embed, entry, "Banned By")
         await self.log(guild, "ban", embed)
 
     @commands.Cog.listener()
@@ -210,10 +268,10 @@ class ServerLogs(commands.Cog):
         if guild.id != GUILD_ID:
             return
         entry = await self.audit_entry(guild, discord.AuditLogAction.unban, user.id)
-        embed = discord.Embed(title="🔓 Member Unbanned", description=f"{user.mention} was unbanned.", color=COLOR_GOOD)
-        embed.set_thumbnail(url=user.display_avatar.url)
-        embed.add_field(name="Member", value=who(user), inline=True)
-        self.add_actor(embed, entry)
+        embed = make(f"{E['unban']} Member Unbanned", f"{user.mention} was unbanned from **{guild.name}**.")
+        self.user_header(embed, user)
+        embed.add_field(name=f"{E['dot']} Member", value=who(user), inline=True)
+        self.add_actor(embed, entry, "Unbanned By")
         await self.log(guild, "ban", embed)
 
     # ---------------------------------------------------------------- roles on members + timeouts
@@ -228,50 +286,68 @@ class ServerLogs(commands.Cog):
         removed = [r for r in before.roles if r not in after.roles]
         if added or removed:
             entry = await self.audit_entry(guild, discord.AuditLogAction.member_role_update, after.id)
-            embed = discord.Embed(
-                title="🎭 Roles Updated",
-                description=f"Roles changed for {after.mention}.",
-                color=COLOR_INFO,
-            )
-            embed.set_thumbnail(url=after.display_avatar.url)
-            embed.add_field(name="Member", value=who(after), inline=True)
-            self.add_actor(embed, entry)
+            if added and not removed:
+                title, icon = "Role Given", E["role_add"]
+            elif removed and not added:
+                title, icon = "Role Removed", E["role_remove"]
+            else:
+                title, icon = "Roles Updated", E["role"]
+            embed = make(f"{icon} {title}", f"Roles changed for {after.mention}.")
+            self.user_header(embed, after)
+            embed.add_field(name=f"{E['dot']} Member", value=who(after), inline=True)
+            self.add_actor(embed, entry, "Changed By")
             if added:
-                embed.add_field(name="➕ Added", value=" ".join(r.mention for r in added)[:1000], inline=False)
+                embed.add_field(name=f"{E['role_add']} Added", value=" ".join(r.mention for r in added)[:1000], inline=False)
             if removed:
-                embed.add_field(name="➖ Removed", value=" ".join(r.mention for r in removed)[:1000], inline=False)
+                embed.add_field(name=f"{E['role_remove']} Removed", value=" ".join(r.mention for r in removed)[:1000], inline=False)
+            current = [r.mention for r in reversed(after.roles) if r != guild.default_role]
+            embed.add_field(
+                name=f"{E['dot']} Current Roles ({len(current)})",
+                value=(" ".join(current)[:1000] if current else "`No roles`"),
+                inline=False,
+            )
             await self.log(guild, "role_member", embed)
 
         # --- timeout / untimeout
         if before.timed_out_until != after.timed_out_until:
             entry = await self.audit_entry(guild, discord.AuditLogAction.member_update, after.id)
-            if after.timed_out_until and after.timed_out_until > discord.utils.utcnow():
-                embed = discord.Embed(
-                    title="⏳ Member Timed Out",
-                    description=f"{after.mention} was timed out.",
-                    color=COLOR_WARN,
-                )
-                embed.add_field(name="Ends", value=discord.utils.format_dt(after.timed_out_until, "R"), inline=True)
+            now = discord.utils.utcnow()
+            if after.timed_out_until and after.timed_out_until > now:
+                embed = make(f"{E['timeout']} Member Timed Out", f"{after.mention} was timed out.")
+                duration = (after.timed_out_until - now).total_seconds()
+                embed.add_field(name=f"{E['dot']} Duration", value=f"`~{human_delta(duration)}`", inline=True)
+                embed.add_field(name=f"{E['dot']} Ends", value=ts(after.timed_out_until), inline=False)
+                by_label = "Timed Out By"
             else:
-                embed = discord.Embed(
-                    title="✅ Timeout Removed",
-                    description=f"The timeout of {after.mention} was removed.",
-                    color=COLOR_GOOD,
-                )
-            embed.set_thumbnail(url=after.display_avatar.url)
-            embed.add_field(name="Member", value=who(after), inline=True)
-            self.add_actor(embed, entry)
+                embed = make(f"{E['untimeout']} Timeout Removed", f"The timeout of {after.mention} was removed.")
+                by_label = "Removed By"
+            self.user_header(embed, after)
+            embed.insert_field_at(0, name=f"{E['dot']} Member", value=who(after), inline=True)
+            self.add_actor(embed, entry, by_label)
             await self.log(guild, "timeout", embed)
 
     # ---------------------------------------------------------------- roles created / deleted
+    @staticmethod
+    def role_info(embed: discord.Embed, role: discord.Role) -> None:
+        embed.add_field(name=f"{E['dot']} Role", value=f"`{role.name}`\n`{role.id}`", inline=True)
+        embed.add_field(name=f"{E['dot']} Color", value=f"`{str(role.color).upper()}`", inline=True)
+        embed.add_field(name=f"{E['dot']} Position", value=f"`{role.position}`", inline=True)
+        embed.add_field(name=f"{E['dot']} Hoisted", value="`Yes`" if role.hoist else "`No`", inline=True)
+        embed.add_field(name=f"{E['dot']} Mentionable", value="`Yes`" if role.mentionable else "`No`", inline=True)
+        embed.add_field(
+            name=f"{E['dot']} Administrator",
+            value="`Yes ⚠️`" if role.permissions.administrator else "`No`",
+            inline=True,
+        )
+
     @commands.Cog.listener()
     async def on_guild_role_create(self, role: discord.Role):
         if role.guild.id != GUILD_ID:
             return
         entry = await self.audit_entry(role.guild, discord.AuditLogAction.role_create, role.id)
-        embed = discord.Embed(title="🆕 Role Created", description=f"{role.mention}", color=COLOR_GOOD)
-        embed.add_field(name="Role", value=f"`{role.name}` (`{role.id}`)", inline=True)
-        self.add_actor(embed, entry)
+        embed = make(f"{E['role_new']} Role Created", f"{role.mention} was created.")
+        self.role_info(embed, role)
+        self.add_actor(embed, entry, "Created By")
         await self.log(role.guild, "role_cd", embed)
 
     @commands.Cog.listener()
@@ -279,21 +355,35 @@ class ServerLogs(commands.Cog):
         if role.guild.id != GUILD_ID:
             return
         entry = await self.audit_entry(role.guild, discord.AuditLogAction.role_delete, role.id)
-        embed = discord.Embed(title="🗑️ Role Deleted", description=f"`{role.name}`", color=COLOR_BAD)
-        embed.add_field(name="Role", value=f"`{role.name}` (`{role.id}`)", inline=True)
-        self.add_actor(embed, entry)
+        embed = make(f"{E['role_del']} Role Deleted", f"`{role.name}` was deleted.")
+        self.role_info(embed, role)
+        self.add_actor(embed, entry, "Deleted By")
         await self.log(role.guild, "role_cd", embed)
 
     # ---------------------------------------------------------------- channels created / deleted
+    @staticmethod
+    def channel_info(embed: discord.Embed, channel: discord.abc.GuildChannel) -> None:
+        embed.add_field(name=f"{E['dot']} Channel", value=f"`{channel.name}`\n`{channel.id}`", inline=True)
+        embed.add_field(name=f"{E['dot']} Type", value=ctype(channel), inline=True)
+        category = getattr(channel, "category", None)
+        embed.add_field(name=f"{E['dot']} Category", value=f"`{category.name}`" if category else "`None`", inline=True)
+        topic = getattr(channel, "topic", None)
+        if topic:
+            embed.add_field(name=f"{E['dot']} Topic", value=f"```{topic[:300]}```", inline=False)
+        if getattr(channel, "nsfw", False):
+            embed.add_field(name=f"{E['dot']} NSFW", value="`Yes`", inline=True)
+        limit = getattr(channel, "user_limit", None)
+        if limit:
+            embed.add_field(name=f"{E['dot']} User Limit", value=f"`{limit}`", inline=True)
+
     @commands.Cog.listener()
     async def on_guild_channel_create(self, channel: discord.abc.GuildChannel):
         if channel.guild.id != GUILD_ID:
             return
         entry = await self.audit_entry(channel.guild, discord.AuditLogAction.channel_create, channel.id)
-        embed = discord.Embed(title="🆕 Channel Created", description=f"{channel.mention}", color=COLOR_GOOD)
-        embed.add_field(name="Channel", value=f"`{channel.name}` (`{channel.id}`)", inline=True)
-        embed.add_field(name="Type", value=f"`{str(channel.type).replace('_', ' ')}`", inline=True)
-        self.add_actor(embed, entry)
+        embed = make(f"{E['chan_new']} Channel Created", f"{channel.mention} was created.")
+        self.channel_info(embed, channel)
+        self.add_actor(embed, entry, "Created By")
         await self.log(channel.guild, "channel_cd", embed)
 
     @commands.Cog.listener()
@@ -301,10 +391,9 @@ class ServerLogs(commands.Cog):
         if channel.guild.id != GUILD_ID:
             return
         entry = await self.audit_entry(channel.guild, discord.AuditLogAction.channel_delete, channel.id)
-        embed = discord.Embed(title="🗑️ Channel Deleted", description=f"`{channel.name}`", color=COLOR_BAD)
-        embed.add_field(name="Channel", value=f"`{channel.name}` (`{channel.id}`)", inline=True)
-        embed.add_field(name="Type", value=f"`{str(channel.type).replace('_', ' ')}`", inline=True)
-        self.add_actor(embed, entry)
+        embed = make(f"{E['chan_del']} Channel Deleted", f"`#{channel.name}` was deleted.")
+        self.channel_info(embed, channel)
+        self.add_actor(embed, entry, "Deleted By")
         await self.log(channel.guild, "channel_cd", embed)
 
 
