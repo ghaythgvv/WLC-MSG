@@ -11,7 +11,7 @@ Logs server events into the matching channel of your SERVER LOGS category:
     role created / deleted .. -ROLE-CREATED-DELETED
     channel created / deleted -CHANNEL-CREATED-DELETED
     voice join / leave / move -join-left-the-channel
-    voice disconnect / mute / deafen -desconect-deafen-mute
+    voice mod mute / deafen / disconnect -desconect-deafen-mute
     everything .............. LOGS-ALL-SERVER
 
 Channels are found automatically by their NAME (the symbols in front don't matter).
@@ -416,7 +416,7 @@ class ServerLogs(commands.Cog):
         embed.set_thumbnail(url=member.display_avatar.url)
         await self.log(guild, "voice", embed)
 
-    # ---------------------------------------------------------------- voice disconnect / mute / deafen
+    # ---------------------------------------------------------------- voice power abuse (moderator actions only)
     @commands.Cog.listener("on_voice_state_update")
     async def voice_mute_deafen(
         self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState
@@ -425,36 +425,46 @@ class ServerLogs(commands.Cog):
         if guild.id != GUILD_ID:
             return
 
-        events = []  # (title, extra lines, done by a moderator)
-        if before.channel is not None and after.channel is None:
-            ch = line("Channel", f"{before.channel.mention} (`{before.channel.id}`)")
-            events.append(("Disconnected From Voice", [ch], False))
+        # --- server mute / deafen (only logged if a moderator did it)
+        events = []
         if after.channel is not None:
-            ch = line("Channel", f"{after.channel.mention} (`{after.channel.id}`)")
-            if before.self_mute != after.self_mute:
-                events.append(("Self Muted" if after.self_mute else "Self Unmuted", [ch], False))
-            if before.self_deaf != after.self_deaf:
-                events.append(("Self Deafened" if after.self_deaf else "Self Undeafened", [ch], False))
             if before.mute != after.mute:
-                events.append(("Server Muted" if after.mute else "Server Unmuted", [ch], True))
+                events.append("Server Muted" if after.mute else "Server Unmuted")
             if before.deaf != after.deaf:
-                events.append(("Server Deafened" if after.deaf else "Server Undeafened", [ch], True))
-        if not events:
-            return
-
-        entry = None
-        if any(e[2] for e in events):
+                events.append("Server Deafened" if after.deaf else "Server Undeafened")
+        for title in events:
             entry = await self.audit_entry(guild, discord.AuditLogAction.member_update, member.id)
-
-        for title, extra, by_mod in events:
+            if entry is None or entry.user.id == member.id:
+                continue
             embed = make(
                 title,
                 line("Member", person(member)),
-                *extra,
-                self.by(entry, "Moderator") if by_mod else "",
+                line("Channel", f"{after.channel.mention} (`{after.channel.id}`)"),
+                self.by(entry, "Moderator"),
             )
             embed.set_thumbnail(url=member.display_avatar.url)
             await self.log(guild, "voice_state", embed)
+
+        # --- disconnected from voice by a moderator
+        if before.channel is not None and after.channel is None:
+            if not guild.me.guild_permissions.view_audit_log:
+                return
+            await asyncio.sleep(2)
+            try:
+                async for entry in guild.audit_logs(limit=5, action=discord.AuditLogAction.member_disconnect):
+                    age = (discord.utils.utcnow() - entry.created_at).total_seconds()
+                    if age <= 5 and entry.user.id != member.id:
+                        embed = make(
+                            "Disconnected By Moderator",
+                            line("Member", person(member)),
+                            line("Channel", f"{before.channel.mention} (`{before.channel.id}`)"),
+                            self.by(entry, "Moderator"),
+                        )
+                        embed.set_thumbnail(url=member.display_avatar.url)
+                        await self.log(guild, "voice_state", embed)
+                        break
+            except discord.HTTPException:
+                pass
 
 
 async def setup(bot: commands.Bot):
