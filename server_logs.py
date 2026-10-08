@@ -10,6 +10,7 @@ Logs server events into the matching channel of your SERVER LOGS category:
     role given / removed .... -ROLE-GIVEN-REMOVED
     role created / deleted .. -ROLE-CREATED-DELETED
     channel created / deleted -CHANNEL-CREATED-DELETED
+    voice join / leave / move -join-left-the-channel
     everything .............. LOGS-ALL-SERVER
 
 Channels are found automatically by their NAME (the emoji / symbols in front don't matter).
@@ -18,6 +19,7 @@ LOG_CHANNEL_IDS below.
 
 The bot needs: View Audit Log (to show WHO did it) + View Channel / Send Messages / Embed Links
 in each log channel. SERVER MEMBERS INTENT must be on (it already is for the welcome bot).
+Voice logs also need the voice_states intent (included in Intents.default()).
 
 This file is loaded by welcome_bot.py:  await bot.load_extension("server_logs")
 """
@@ -42,6 +44,7 @@ CHANNEL_KEYWORDS = {
     "role_member": "role-given-removed",
     "role_cd": "role-created-deleted",
     "channel_cd": "channel-created-deleted",
+    "voice": "join-left-the-channel",
     "all": "logs-all-server",
 }
 
@@ -389,6 +392,33 @@ class ServerLogs(commands.Cog):
         self.channel_fields(embed, channel)
         self.actor(embed, entry)
         await self.log(channel.guild, "channel_cd", embed)
+
+    # ---------------------------------------------------------------- voice join / leave / move
+    @commands.Cog.listener()
+    async def on_voice_state_update(
+        self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState
+    ):
+        guild = member.guild
+        if guild.id != GUILD_ID or before.channel == after.channel:
+            return
+
+        if before.channel is None and after.channel is not None:
+            embed = make("Joined Voice Channel", f"{member.mention} joined {after.channel.mention}.")
+            embed.add_field(name="Channel", value=f"{after.channel.name}\n`{after.channel.id}`", inline=True)
+        elif before.channel is not None and after.channel is None:
+            embed = make("Left Voice Channel", f"{member.mention} left {before.channel.mention}.")
+            embed.add_field(name="Channel", value=f"{before.channel.name}\n`{before.channel.id}`", inline=True)
+        else:
+            embed = make(
+                "Moved Voice Channel",
+                f"{member.mention} moved from {before.channel.mention} to {after.channel.mention}.",
+            )
+            embed.add_field(name="From", value=f"{before.channel.name}\n`{before.channel.id}`", inline=True)
+            embed.add_field(name="To", value=f"{after.channel.name}\n`{after.channel.id}`", inline=True)
+
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.insert_field_at(0, name="Member", value=person(member), inline=True)
+        await self.log(guild, "voice", embed)
 
 
 async def setup(bot: commands.Bot):
