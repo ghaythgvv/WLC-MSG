@@ -22,6 +22,15 @@ The bot needs: View Audit Log (to show WHO did it) + View Channel / Send Message
 in each log channel. SERVER MEMBERS INTENT must be on (it already is for the welcome bot).
 
 This file is loaded by welcome_bot.py:  await bot.load_extension("server_logs")
+
+Fixed in this version
+    - Voice logs no longer show "# unknown": when the voice channel was deleted in the meantime
+      (temporary / report rooms), the channel NAME is shown instead.
+    - "Disconnected By Moderator" is only logged when the audit log really shows a NEW disconnect.
+      Before, someone leaving on their own right after a moderator disconnected another person
+      was blamed on that moderator.
+    - Server mute / deafen and timeout logs now check that the audit entry really is a mute / deafen /
+      timeout, so a nickname change or other edit can't be shown as the "moderator" of a mute.
 """
 
 from __future__ import annotations
@@ -109,9 +118,20 @@ def yn(value: bool) -> str:
     return "Yes" if value else "No"
 
 
+def vc_ref(guild: discord.Guild, channel) -> str:
+    """A clickable voice channel - or, if it was deleted meanwhile (temporary / report rooms),
+    its name instead of '# unknown'."""
+    live = guild.get_channel(channel.id)
+    if live is not None:
+        return f"{live.mention} (`{live.id}`)"
+    return f"**{channel.name}** (`{channel.id}`) - channel was deleted"
+
+
 class ServerLogs(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # audit entry id -> how many of its disconnects were already matched to a member
+        self._disconnects_used: dict[int, int] = {}
 
     # ---------------------------------------------------------------- helpers
     def find_channel(self, guild: discord.Guild, key: str) -> discord.TextChannel | None:
@@ -164,17 +184,22 @@ class ServerLogs(commands.Cog):
         action: discord.AuditLogAction,
         target_id: int,
         within: float = 20.0,
+        check=None,
     ) -> discord.AuditLogEntry | None:
-        """Finds the audit log entry for an action that just happened (to show who did it)."""
+        """Finds the audit log entry for an action that just happened (to show who did it).
+        `check(entry)` can reject entries that are the right type but the wrong kind of change."""
         if not guild.me.guild_permissions.view_audit_log:
             return None
         await asyncio.sleep(2)  # Discord writes the audit log entry slightly after the event
         try:
             async for entry in guild.audit_logs(limit=15, action=action):
-                if entry.target is not None and entry.target.id == target_id:
-                    age = (discord.utils.utcnow() - entry.created_at).total_seconds()
-                    if age <= within:
-                        return entry
+                if entry.target is None or entry.target.id != target_id:
+                    continue
+                if check is not None and not check(entry):
+                    continue
+                age = (discord.utils.utcnow() - entry.created_at).total_seconds()
+                if age <= within:
+                    return entry
         except discord.HTTPException:
             pass
         return None
@@ -300,7 +325,11 @@ class ServerLogs(commands.Cog):
 
         # --- timeout / untimeout
         if before.timed_out_until != after.timed_out_until:
-            entry = await self.audit_entry(guild, discord.AuditLogAction.member_update, after.id)
+            entry = await self.audit_entry(
+                guild, discord.AuditLogAction.member_update, after.id,
+                check=lambda e: getattr(e.before, "timed_out_until", None) is not None
+                or getattr(e.after, "timed_out_until", None) is not None,
+            )
             now = discord.utils.utcnow()
             if after.timed_out_until and after.timed_out_until > now:
                 embed = make(
@@ -397,26 +426,51 @@ class ServerLogs(commands.Cog):
             embed = make(
                 "Joined Voice Channel",
                 line("Member", person(member)),
-                line("Channel", f"{after.channel.mention} (`{after.channel.id}`)"),
+                line("Channel", vc_ref(guild, after.channel)),
             )
         elif before.channel is not None and after.channel is None:
             embed = make(
                 "Left Voice Channel",
                 line("Member", person(member)),
-                line("Channel", f"{before.channel.mention} (`{before.channel.id}`)"),
+                line("Channel", vc_ref(guild, before.channel)),
             )
         else:
             embed = make(
                 "Moved Voice Channel",
                 line("Member", person(member)),
-                line("From", f"{before.channel.mention} (`{before.channel.id}`)"),
-                line("To", f"{after.channel.mention} (`{after.channel.id}`)"),
+                line("From", vc_ref(guild, before.channel)),
+                line("To", vc_ref(guild, after.channel)),
             )
 
         embed.set_thumbnail(url=member.display_avatar.url)
         await self.log(guild, "voice", embed)
 
     # ---------------------------------------------------------------- voice power abuse (moderator actions only)
+    async def _disconnect_entry(self, guild: discord.Guild, member: discord.Member) -> discord.AuditLogEntry | None:
+        """Returns the audit entry of a moderator disconnect that has NOT been matched to a member yet.
+        Discord writes ONE entry per disconnect action and raises its `count` when the same moderator
+        disconnects more people shortly after - so every leave 'uses up' one count. A person who simply
+        leaves on their own finds no unused count and is correctly ignored."""
+        if not guild.me.guild_permissions.view_audit_log:
+            return None
+        await asyncio.sleep(2)
+        try:
+            async for entry in guild.audit_logs(limit=8, action=discord.AuditLogAction.member_disconnect):
+                age = (discord.utils.utcnow() - entry.created_at).total_seconds()
+                if age > 15 or entry.user is None or entry.user.id == member.id:
+                    continue
+                count = int(getattr(entry.extra, "count", 1) or 1)
+                used = self._disconnects_used.get(entry.id, 0)
+                if used < count:
+                    self._disconnects_used[entry.id] = used + 1
+                    if len(self._disconnects_used) > 200:   # keep the memory small
+                        for old in sorted(self._disconnects_used)[:100]:
+                            self._disconnects_used.pop(old, None)
+                    return entry
+        except discord.HTTPException:
+            pass
+        return None
+
     @commands.Cog.listener("on_voice_state_update")
     async def voice_mute_deafen(
         self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState
@@ -429,17 +483,20 @@ class ServerLogs(commands.Cog):
         events = []
         if after.channel is not None:
             if before.mute != after.mute:
-                events.append("Server Muted" if after.mute else "Server Unmuted")
+                events.append(("Server Muted" if after.mute else "Server Unmuted", "mute"))
             if before.deaf != after.deaf:
-                events.append("Server Deafened" if after.deaf else "Server Undeafened")
-        for title in events:
-            entry = await self.audit_entry(guild, discord.AuditLogAction.member_update, member.id)
+                events.append(("Server Deafened" if after.deaf else "Server Undeafened", "deaf"))
+        for title, attr in events:
+            entry = await self.audit_entry(
+                guild, discord.AuditLogAction.member_update, member.id,
+                check=lambda e, a=attr: getattr(e.after, a, None) is not None,
+            )
             if entry is None or entry.user.id == member.id:
                 continue
             embed = make(
                 title,
                 line("Member", person(member)),
-                line("Channel", f"{after.channel.mention} (`{after.channel.id}`)"),
+                line("Channel", vc_ref(guild, after.channel)),
                 self.by(entry, "Moderator"),
             )
             embed.set_thumbnail(url=member.display_avatar.url)
@@ -447,24 +504,16 @@ class ServerLogs(commands.Cog):
 
         # --- disconnected from voice by a moderator
         if before.channel is not None and after.channel is None:
-            if not guild.me.guild_permissions.view_audit_log:
-                return
-            await asyncio.sleep(2)
-            try:
-                async for entry in guild.audit_logs(limit=5, action=discord.AuditLogAction.member_disconnect):
-                    age = (discord.utils.utcnow() - entry.created_at).total_seconds()
-                    if age <= 5 and entry.user.id != member.id:
-                        embed = make(
-                            "Disconnected By Moderator",
-                            line("Member", person(member)),
-                            line("Channel", f"{before.channel.mention} (`{before.channel.id}`)"),
-                            self.by(entry, "Moderator"),
-                        )
-                        embed.set_thumbnail(url=member.display_avatar.url)
-                        await self.log(guild, "voice_state", embed)
-                        break
-            except discord.HTTPException:
-                pass
+            entry = await self._disconnect_entry(guild, member)
+            if entry is not None:
+                embed = make(
+                    "Disconnected By Moderator",
+                    line("Member", person(member)),
+                    line("Channel", vc_ref(guild, before.channel)),
+                    self.by(entry, "Moderator"),
+                )
+                embed.set_thumbnail(url=member.display_avatar.url)
+                await self.log(guild, "voice_state", embed)
 
 
 async def setup(bot: commands.Bot):
